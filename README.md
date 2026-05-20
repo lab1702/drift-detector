@@ -51,6 +51,36 @@ print(result)
 - `thresholds=(0.6, 0.7, 0.8)` — drift-band cut points.
 - `top_n=5` — number of drift drivers to report.
 
+## Rolling drift over time
+
+`detect_drift_rolling` bins the timeline into consecutive periods by a pandas
+frequency (offset alias) and runs `detect_drift` across them, returning one row
+per comparison:
+
+```python
+from drift_detector import detect_drift_rolling
+
+# Each month vs the next:
+report = detect_drift_rolling(df, "event_date", "MS", mode="consecutive")
+
+# Every month vs the most recent month as the baseline:
+report = detect_drift_rolling(
+    df, "event_date", "MS", mode="baseline", baseline="last"
+)
+```
+
+- `freq` is a pandas offset alias: `"MS"` (month start), `"W"`, `"QS"`, `"30D"`, ...
+- `mode="consecutive"` compares each period to the next; `mode="baseline"`
+  compares every period to one fixed reference.
+- `baseline` (baseline mode): `"first"` (default), `"last"`, or an explicit
+  `(start, end)` tuple. The reference stays in the window-1 columns.
+- Periods with fewer than 2 rows are dropped with a warning.
+- Extra keyword arguments (`features`, `n_splits`, `n_permutations`,
+  `thresholds`, `top_n`, `random_state`) are forwarded to each `detect_drift`
+  call.
+
+The result is a stacked DataFrame using the same columns as `detect_drift`.
+
 ## Run the demo and tests
 
 ```bash

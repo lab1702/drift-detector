@@ -51,3 +51,13 @@ if __name__ == "__main__":
     print("\nTop drivers:")
     for d in result["top_drivers"].iloc[0]:
         print(f"  {d['feature']:<12} {d['importance']:.3f}")
+
+    from drift_detector import detect_drift_rolling
+
+    print("\nRolling (consecutive months):")
+    rolling = detect_drift_rolling(
+        df, date_column="event_date", freq="MS", mode="consecutive",
+        n_permutations=50,
+    )
+    cols = ["start_date_2", "end_date_2", "n_window_2", "auc", "drift_label", "p_value"]
+    print(rolling[cols].to_string(index=False))
