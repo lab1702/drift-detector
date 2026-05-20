@@ -162,3 +162,110 @@ def test_top_drivers_handles_all_zero_importance():
 
 def test_top_drivers_empty_when_no_importances():
     assert _top_drivers([], ["a"], top_n=3) == []
+
+
+from drift_detector import detect_drift
+
+_W1 = ("2024-01-01", "2024-01-31")
+_W2 = ("2024-03-01", "2024-03-31")
+_EXPECTED_COLUMNS = [
+    "start_date_1", "end_date_1", "start_date_2", "end_date_2",
+    "n_window_1", "n_window_2", "n_features", "auc", "drift_label",
+    "p_value", "top_drivers",
+]
+
+
+def _make_drift_df(n_per=400, drift=False, seed=0):
+    rng = np.random.RandomState(seed)
+    dates1 = pd.to_datetime("2024-01-01") + pd.to_timedelta(
+        rng.randint(0, 30, n_per), unit="D"
+    )
+    dates2 = pd.to_datetime("2024-03-01") + pd.to_timedelta(
+        rng.randint(0, 30, n_per), unit="D"
+    )
+    x1 = rng.normal(0, 1, n_per)
+    x2 = rng.normal(3, 1, n_per) if drift else rng.normal(0, 1, n_per)
+    return pd.DataFrame(
+        {
+            "date": pd.concat(
+                [pd.Series(dates1), pd.Series(dates2)], ignore_index=True
+            ),
+            "x": np.concatenate([x1, x2]),
+            "noise": rng.normal(0, 1, 2 * n_per),
+            "cat": rng.choice(["a", "b", "c"], 2 * n_per),
+        }
+    )
+
+
+def test_detect_drift_no_drift():
+    df = _make_drift_df(n_per=400, drift=False, seed=1)
+    res = detect_drift(df, "date", *_W1, *_W2, n_permutations=50, random_state=0)
+    assert res["auc"].iloc[0] <= 0.6
+    assert res["drift_label"].iloc[0] == "none"
+    assert res["p_value"].iloc[0] > 0.05
+
+
+def test_detect_drift_with_injected_drift_and_driver():
+    df = _make_drift_df(n_per=400, drift=True, seed=2)
+    res = detect_drift(df, "date", *_W1, *_W2, n_permutations=50, random_state=0)
+    assert res["auc"].iloc[0] >= 0.8
+    assert res["drift_label"].iloc[0] == "severe"
+    assert res["p_value"].iloc[0] <= 0.05
+    assert res["top_drivers"].iloc[0][0]["feature"] == "x"
+
+
+def test_detect_drift_output_schema():
+    df = _make_drift_df(n_per=100, drift=True, seed=3)
+    res = detect_drift(df, "date", *_W1, *_W2, n_permutations=10, random_state=0)
+    assert list(res.columns) == _EXPECTED_COLUMNS
+    assert len(res) == 1
+    assert res["n_window_1"].iloc[0] > 0
+    assert res["n_window_2"].iloc[0] > 0
+
+
+def test_detect_drift_explicit_features():
+    df = _make_drift_df(n_per=100, drift=True, seed=5)
+    res = detect_drift(
+        df, "date", *_W1, *_W2, features=["x"], n_permutations=10, random_state=0
+    )
+    assert res["n_features"].iloc[0] == 1
+
+
+def test_detect_drift_empty_window_raises():
+    df = _make_drift_df(n_per=50)
+    with pytest.raises(ValueError):
+        detect_drift(df, "date", "2020-01-01", "2020-01-31", *_W2, n_permutations=5)
+
+
+def test_detect_drift_missing_date_column_raises():
+    df = _make_drift_df(n_per=10)
+    with pytest.raises(ValueError):
+        detect_drift(df, "nope", *_W1, *_W2, n_permutations=5)
+
+
+def test_detect_drift_all_features_dropped_raises():
+    df = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-15"] * 5 + ["2024-03-15"] * 5),
+            "row_id": range(10),
+            "const": [7] * 10,
+        }
+    )
+    with pytest.raises(ValueError):
+        detect_drift(df, "date", *_W1, *_W2, n_permutations=5)
+
+
+def test_detect_drift_overlapping_windows_warn():
+    df = _make_drift_df(n_per=100, drift=False, seed=6)
+    with pytest.warns(UserWarning):
+        detect_drift(
+            df, "date", "2024-01-01", "2024-03-31", "2024-01-15", "2024-04-30",
+            n_permutations=5, random_state=0,
+        )
+
+
+def test_detect_drift_small_window_reduces_splits_warn():
+    df = _make_drift_df(n_per=3, drift=True, seed=4)
+    with pytest.warns(UserWarning):
+        res = detect_drift(df, "date", *_W1, *_W2, n_permutations=5, random_state=0)
+    assert len(res) == 1

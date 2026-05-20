@@ -177,3 +177,81 @@ def _top_drivers(importances, feature_names, top_n):
     return [
         {"feature": feature_names[i], "importance": float(shares[i])} for i in order
     ]
+
+
+def detect_drift(
+    df,
+    date_column,
+    start1,
+    end1,
+    start2,
+    end2,
+    *,
+    features=None,
+    n_splits=5,
+    n_permutations=100,
+    thresholds=(0.6, 0.7, 0.8),
+    top_n=5,
+    random_state=0,
+):
+    """Detect distribution drift between two date windows of ``df``.
+
+    Trains a LightGBM domain classifier to distinguish window-1 rows (label 0)
+    from window-2 rows (label 1). Returns a one-row DataFrame with the
+    cross-validated ROC-AUC, a none/mild/moderate/severe label, a
+    permutation-test p-value, and the top drift-driving features.
+
+    Date bounds are inclusive and compared as timestamps after
+    ``pd.to_datetime``; a bare date like ``"2024-01-31"`` is midnight, so later
+    times that day fall outside the window.
+    """
+    if date_column not in df.columns:
+        raise ValueError(f"date_column {date_column!r} not in dataframe.")
+
+    dates = pd.to_datetime(df[date_column])
+    s1, e1 = pd.to_datetime(start1), pd.to_datetime(end1)
+    s2, e2 = pd.to_datetime(start2), pd.to_datetime(end2)
+
+    if max(s1, s2) <= min(e1, e2):
+        warnings.warn("Window 1 and window 2 overlap in time.", UserWarning)
+
+    m1 = (dates >= s1) & (dates <= e1)
+    m2 = (dates >= s2) & (dates <= e2)
+    n1, n2 = int(m1.sum()), int(m2.sum())
+    if n1 == 0 or n2 == 0:
+        raise ValueError(
+            f"Empty window: window 1 has {n1} rows, window 2 has {n2} rows."
+        )
+
+    frame = pd.concat([df.loc[m1], df.loc[m2]], ignore_index=True)
+    y = np.array([0] * n1 + [1] * n2)
+
+    X = _prepare_features(frame, date_column, features)
+    n_splits_resolved = _resolve_n_splits(y, n_splits)
+
+    auc, importances = _cv_auc(
+        X, y, n_splits_resolved, random_state, collect_importance=True
+    )
+    label = _label_drift(auc, thresholds)
+    p_value = _permutation_pvalue(
+        X, y, auc, n_splits_resolved, n_permutations, random_state
+    )
+    drivers = _top_drivers(importances, list(X.columns), top_n)
+
+    return pd.DataFrame(
+        [
+            {
+                "start_date_1": s1,
+                "end_date_1": e1,
+                "start_date_2": s2,
+                "end_date_2": e2,
+                "n_window_1": n1,
+                "n_window_2": n2,
+                "n_features": X.shape[1],
+                "auc": auc,
+                "drift_label": label,
+                "p_value": p_value,
+                "top_drivers": drivers,
+            }
+        ]
+    )
