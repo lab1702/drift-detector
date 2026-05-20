@@ -272,3 +272,11 @@ def test_detect_drift_small_window_reduces_splits_warn():
     with pytest.warns(UserWarning):
         res = detect_drift(df, "date", *_W1, *_W2, n_permutations=5, random_state=0)
     assert len(res) == 1
+
+
+def test_detect_drift_unknown_feature_raises():
+    df = _make_drift_df(n_per=20, drift=True, seed=7)
+    with pytest.raises(ValueError):
+        detect_drift(
+            df, "date", *_W1, *_W2, features=["does_not_exist"], n_permutations=5
+        )

@@ -153,6 +153,11 @@ def _permutation_pvalue(X, y, observed_auc, n_splits, n_permutations, random_sta
     """
     rng = np.random.RandomState(random_state)
     count = 0
+    # Fold partitions are held fixed across permutations (same random_state),
+    # matching scikit-learn's permutation_test_score: we permute only the
+    # labels and keep the analysis pipeline (including the CV split) constant,
+    # so the p-value isolates the label-feature association rather than
+    # fold-split variance.
     for _ in range(n_permutations):
         y_perm = rng.permutation(y)
         perm_auc = _cv_auc(X, y_perm, n_splits, random_state)
