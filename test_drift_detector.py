@@ -308,6 +308,8 @@ def test_build_period_windows_tick_freq_starts_at_lo():
 def test_build_period_windows_single_period():
     w = _build_period_windows("MS", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-27"))
     assert len(w) == 1
+    assert w[0][0] == pd.Timestamp("2024-01-01")
+    assert w[0][1] == pd.Timestamp("2024-01-27")
 
 
 from drift_detector import detect_drift_rolling
@@ -441,3 +443,30 @@ def test_rolling_bad_baseline_raises():
     df = _make_monthly_df()
     with pytest.raises(ValueError):
         detect_drift_rolling(df, "date", "MS", mode="baseline", baseline="middle")
+
+
+def test_rolling_baseline_tuple_fixed_reference():
+    df = _make_monthly_df(seed=7)  # Jan..May -> 5 usable periods
+    # An explicit baseline window overlaps the February period, so detect_drift
+    # emits an overlap warning for that one pair.
+    with pytest.warns(UserWarning):
+        res = detect_drift_rolling(
+            df, "date", "MS", mode="baseline",
+            baseline=("2024-02-01", "2024-02-29"),
+            n_permutations=5, random_state=0,
+        ).reset_index(drop=True)
+    assert len(res) == 5  # tuple mode keeps every period as a candidate
+    assert (res["start_date_1"] == pd.Timestamp("2024-02-01")).all()
+    assert (res["end_date_1"] == pd.Timestamp("2024-02-29")).all()
+    assert list(res["start_date_2"].dt.month) == [1, 2, 3, 4, 5]
+
+
+def test_rolling_start_end_override():
+    df = _make_monthly_df(seed=8)  # Jan..May
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="consecutive",
+        start="2024-02-01", end="2024-04-30",
+        n_permutations=5, random_state=0,
+    ).reset_index(drop=True)
+    assert len(res) == 2  # only Feb,Mar,Apr binned -> 2 consecutive pairs
+    assert list(res["start_date_2"].dt.month) == [3, 4]
