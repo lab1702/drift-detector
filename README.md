@@ -15,11 +15,18 @@ separable the windows are.
 
 ## Setup
 
+Install the package (the import module is `drift_detector`):
+
+```bash
+pip install .          # runtime deps only
+pip install -e .[test] # editable, plus pytest for the test suite
+```
+
 A virtual environment is already provided in `.venv/`. To recreate it:
 
 ```bash
 python -m venv .venv
-./.venv/Scripts/python.exe -m pip install -r requirements.txt
+./.venv/Scripts/python.exe -m pip install -e .[test]
 ```
 
 ## Usage
