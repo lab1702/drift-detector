@@ -51,3 +51,31 @@ if __name__ == "__main__":
     print("\nTop drivers:")
     for d in result["top_drivers"].iloc[0]:
         print(f"  {d['feature']:<12} {d['importance']:.3f}")
+
+    # Rolling drift across several months (consecutive periods).
+    # `amount` shifts up starting in March, so only the Feb -> Mar step drifts.
+    from drift_detector import detect_drift_rolling
+
+    rng = np.random.RandomState(0)
+    monthly = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "event_date": pd.to_datetime(m + "-01")
+                    + pd.to_timedelta(rng.randint(0, 27, 300), unit="D"),
+                    "amount": rng.normal(130 if m >= "2024-03" else 100, 15, 300),
+                    "score": rng.normal(0, 1, 300),
+                }
+            )
+            for m in ["2024-01", "2024-02", "2024-03", "2024-04"]
+        ],
+        ignore_index=True,
+    )
+
+    print("\nRolling (consecutive months):")
+    rolling = detect_drift_rolling(
+        monthly, date_column="event_date", freq="MS", mode="consecutive",
+        n_permutations=50,
+    )
+    cols = ["start_date_2", "end_date_2", "n_window_2", "auc", "drift_label", "p_value"]
+    print(rolling[cols].to_string(index=False))

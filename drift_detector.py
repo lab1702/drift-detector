@@ -184,6 +184,29 @@ def _top_drivers(importances, feature_names, top_n):
     ]
 
 
+def _build_period_windows(freq, lo, hi):
+    """Build calendar-aligned, non-overlapping, inclusive [start, end] windows.
+
+    Snaps ``lo`` back to a period boundary with the offset's ``rollback`` (a
+    no-op for tick offsets like ``"30D"``), generates edges with
+    ``pd.date_range``, and forms windows ``[edges[i], edges[i+1] - 1ns]`` with
+    the final window ending at ``hi``. ``freq`` is a pandas offset alias
+    (``"MS"``, ``"W"``, ``"QS"``, ``"30D"``, ...).
+    """
+    offset = pd.tseries.frequencies.to_offset(freq)
+    first_edge = offset.rollback(pd.Timestamp(lo))
+    edges = pd.date_range(start=first_edge, end=pd.Timestamp(hi), freq=freq)
+    windows = []
+    for i in range(len(edges)):
+        w_start = edges[i]
+        if i + 1 < len(edges):
+            w_end = edges[i + 1] - pd.Timedelta(nanoseconds=1)
+        else:
+            w_end = pd.Timestamp(hi)
+        windows.append((w_start, w_end))
+    return windows
+
+
 def detect_drift(
     df,
     date_column,
@@ -260,3 +283,85 @@ def detect_drift(
             }
         ]
     )
+
+
+def detect_drift_rolling(
+    df,
+    date_column,
+    freq,
+    *,
+    mode="consecutive",
+    baseline="first",
+    start=None,
+    end=None,
+    **detect_drift_kwargs,
+):
+    """Run ``detect_drift`` across periods of a timeline and stack the rows.
+
+    Bins the data's date range into consecutive, calendar-aligned periods of
+    width ``freq`` (a pandas offset alias such as ``"MS"``, ``"W"``, ``"QS"``,
+    ``"30D"``) and compares them:
+
+    - ``mode="consecutive"``: each period vs the next.
+    - ``mode="baseline"``: every period vs one fixed reference window, chosen by
+      ``baseline``: ``"first"`` (earliest period, the default), ``"last"`` (most
+      recent period), or an explicit ``(start, end)`` tuple. The reference is
+      held in the window-1 columns across all rows.
+
+    Periods with fewer than 2 rows are dropped (cannot cross-validate) with a
+    warning. Extra keyword arguments are forwarded to each ``detect_drift``
+    call. Returns a DataFrame with one row per comparison, using
+    ``detect_drift``'s schema.
+    """
+    if date_column not in df.columns:
+        raise ValueError(f"date_column {date_column!r} not in dataframe.")
+    if mode not in ("consecutive", "baseline"):
+        raise ValueError(
+            f"mode must be 'consecutive' or 'baseline', got {mode!r}."
+        )
+
+    dates = pd.to_datetime(df[date_column])
+    lo = pd.to_datetime(start) if start is not None else dates.min()
+    hi = pd.to_datetime(end) if end is not None else dates.max()
+
+    windows = _build_period_windows(freq, lo, hi)
+
+    usable, dropped = [], []
+    for w_start, w_end in windows:
+        n = int(((dates >= w_start) & (dates <= w_end)).sum())
+        (usable if n >= 2 else dropped).append((w_start, w_end))
+    if dropped:
+        spans = ", ".join(f"[{s.date()}..{e.date()}]" for s, e in dropped)
+        warnings.warn(
+            f"Dropping {len(dropped)} period(s) with <2 rows: {spans}",
+            UserWarning,
+        )
+    if len(usable) < 2:
+        raise ValueError(
+            f"Need at least 2 usable periods (>=2 rows each); found {len(usable)}."
+        )
+
+    if mode == "consecutive":
+        pairs = list(zip(usable, usable[1:]))
+    else:  # baseline
+        if baseline is None or baseline == "first":
+            ref, candidates = usable[0], usable[1:]
+        elif baseline == "last":
+            ref, candidates = usable[-1], usable[:-1]
+        elif isinstance(baseline, (tuple, list)) and len(baseline) == 2:
+            ref = (pd.to_datetime(baseline[0]), pd.to_datetime(baseline[1]))
+            candidates = list(usable)
+        else:
+            raise ValueError(
+                "baseline must be 'first', 'last', or a (start, end) tuple; "
+                f"got {baseline!r}."
+            )
+        pairs = [(ref, cand) for cand in candidates]
+
+    rows = [
+        detect_drift(
+            df, date_column, w1[0], w1[1], w2[0], w2[1], **detect_drift_kwargs
+        )
+        for w1, w2 in pairs
+    ]
+    return pd.concat(rows, ignore_index=True)

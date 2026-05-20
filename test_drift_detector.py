@@ -280,3 +280,193 @@ def test_detect_drift_unknown_feature_raises():
         detect_drift(
             df, "date", *_W1, *_W2, features=["does_not_exist"], n_permutations=5
         )
+
+
+from drift_detector import _build_period_windows
+
+
+def test_build_period_windows_monthly_non_overlapping():
+    lo = pd.Timestamp("2024-01-05")
+    hi = pd.Timestamp("2024-03-20")
+    w = _build_period_windows("MS", lo, hi)
+    assert w[0][0] == pd.Timestamp("2024-01-01")  # snapped back to month start
+    assert w[1][0] == pd.Timestamp("2024-02-01")
+    assert len(w) == 3
+    for (s1, e1), (s2, e2) in zip(w, w[1:]):
+        assert e1 < s2  # non-overlapping
+    assert w[-1][1] == hi  # last window ends at hi
+
+
+def test_build_period_windows_tick_freq_starts_at_lo():
+    lo = pd.Timestamp("2024-01-05")
+    hi = pd.Timestamp("2024-02-20")
+    w = _build_period_windows("30D", lo, hi)
+    assert w[0][0] == lo  # tick offset: rollback is identity
+    assert w[-1][1] == hi
+
+
+def test_build_period_windows_single_period():
+    w = _build_period_windows("MS", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-27"))
+    assert len(w) == 1
+    assert w[0][0] == pd.Timestamp("2024-01-01")
+    assert w[0][1] == pd.Timestamp("2024-01-27")
+
+
+from drift_detector import detect_drift_rolling
+
+
+def _make_monthly_df(seed=0, drift_from="2024-04"):
+    """5 monthly periods (Jan..May), ~80 rows each. Feature `x` mean-shifts
+    from 0 to 5 starting at `drift_from`, so the transition into that month
+    is the only strongly-drifting consecutive pair."""
+    rng = np.random.RandomState(seed)
+    frames = []
+    for m in ["2024-01", "2024-02", "2024-03", "2024-04", "2024-05"]:
+        n = 80
+        dates = pd.to_datetime(m + "-01") + pd.to_timedelta(
+            rng.randint(0, 27, n), unit="D"
+        )
+        mean = 5.0 if m >= drift_from else 0.0
+        frames.append(
+            pd.DataFrame(
+                {
+                    "date": dates,
+                    "x": rng.normal(mean, 1, n),
+                    "noise": rng.normal(0, 1, n),
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_rolling_consecutive_row_count_and_schema():
+    df = _make_monthly_df(seed=1)
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="consecutive", n_permutations=5, random_state=0
+    )
+    assert list(res.columns) == _EXPECTED_COLUMNS
+    assert len(res) == 4  # 5 months -> 4 consecutive pairs
+    assert res.index.tolist() == list(range(4))  # concat(ignore_index=True)
+
+
+def test_rolling_consecutive_flags_drift_transition():
+    df = _make_monthly_df(seed=1, drift_from="2024-04")
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="consecutive", n_permutations=5, random_state=0
+    ).reset_index(drop=True)
+    apr = res[res["start_date_2"].dt.month == 4]
+    assert apr["auc"].iloc[0] >= 0.8
+    assert apr["drift_label"].iloc[0] == "severe"
+    feb = res[res["start_date_2"].dt.month == 2]
+    assert feb["drift_label"].iloc[0] != "severe"
+
+
+def test_rolling_baseline_first_fixed_reference():
+    df = _make_monthly_df(seed=2)
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="baseline", baseline="first",
+        n_permutations=5, random_state=0,
+    ).reset_index(drop=True)
+    assert len(res) == 4
+    assert (res["start_date_1"] == pd.Timestamp("2024-01-01")).all()
+    assert list(res["start_date_2"].dt.month) == [2, 3, 4, 5]
+
+
+def test_rolling_baseline_last_fixed_reference():
+    df = _make_monthly_df(seed=3)
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="baseline", baseline="last",
+        n_permutations=5, random_state=0,
+    ).reset_index(drop=True)
+    assert len(res) == 4
+    assert (res["start_date_1"] == pd.Timestamp("2024-05-01")).all()
+    assert list(res["start_date_2"].dt.month) == [1, 2, 3, 4]
+
+
+def test_rolling_drops_sparse_period_with_warning():
+    rng = np.random.RandomState(0)
+    dense = [
+        pd.DataFrame(
+            {
+                "date": pd.to_datetime(m + "-01")
+                + pd.to_timedelta(rng.randint(0, 27, 60), unit="D"),
+                "x": rng.normal(0, 1, 60),
+            }
+        )
+        for m in ["2024-01", "2024-02", "2024-03"]
+    ]
+    sparse = pd.DataFrame({"date": [pd.Timestamp("2024-04-10")], "x": [0.0]})
+    df = pd.concat(dense + [sparse], ignore_index=True)
+    with pytest.warns(UserWarning):
+        res = detect_drift_rolling(
+            df, "date", "MS", mode="consecutive", n_permutations=5, random_state=0
+        )
+    assert len(res) == 2
+    assert set(res["start_date_2"].dt.month) == {2, 3}
+
+
+def test_rolling_forwards_kwargs_features():
+    df = _make_monthly_df(seed=5)
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="consecutive",
+        features=["x"], n_permutations=5, random_state=0,
+    )
+    assert (res["n_features"] == 1).all()
+
+
+def test_rolling_missing_date_column_raises():
+    df = _make_monthly_df()
+    with pytest.raises(ValueError):
+        detect_drift_rolling(df, "nope", "MS")
+
+
+def test_rolling_bad_mode_raises():
+    df = _make_monthly_df()
+    with pytest.raises(ValueError):
+        detect_drift_rolling(df, "date", "MS", mode="sideways")
+
+
+def test_rolling_too_few_periods_raises():
+    rng = np.random.RandomState(0)
+    df = pd.DataFrame(
+        {
+            "date": pd.to_datetime("2024-01-01")
+            + pd.to_timedelta(rng.randint(0, 27, 50), unit="D"),
+            "x": rng.normal(0, 1, 50),
+        }
+    )
+    with pytest.raises(ValueError):
+        detect_drift_rolling(df, "date", "MS")
+
+
+def test_rolling_bad_baseline_raises():
+    df = _make_monthly_df()
+    with pytest.raises(ValueError):
+        detect_drift_rolling(df, "date", "MS", mode="baseline", baseline="middle")
+
+
+def test_rolling_baseline_tuple_fixed_reference():
+    df = _make_monthly_df(seed=7)  # Jan..May -> 5 usable periods
+    # An explicit baseline window overlaps the February period, so detect_drift
+    # emits an overlap warning for that one pair.
+    with pytest.warns(UserWarning):
+        res = detect_drift_rolling(
+            df, "date", "MS", mode="baseline",
+            baseline=("2024-02-01", "2024-02-29"),
+            n_permutations=5, random_state=0,
+        ).reset_index(drop=True)
+    assert len(res) == 5  # tuple mode keeps every period as a candidate
+    assert (res["start_date_1"] == pd.Timestamp("2024-02-01")).all()
+    assert (res["end_date_1"] == pd.Timestamp("2024-02-29")).all()
+    assert list(res["start_date_2"].dt.month) == [1, 2, 3, 4, 5]
+
+
+def test_rolling_start_end_override():
+    df = _make_monthly_df(seed=8)  # Jan..May
+    res = detect_drift_rolling(
+        df, "date", "MS", mode="consecutive",
+        start="2024-02-01", end="2024-04-30",
+        n_permutations=5, random_state=0,
+    ).reset_index(drop=True)
+    assert len(res) == 2  # only Feb,Mar,Apr binned -> 2 consecutive pairs
+    assert list(res["start_date_2"].dt.month) == [3, 4]
