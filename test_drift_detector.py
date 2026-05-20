@@ -79,3 +79,38 @@ def test_prepare_features_all_dropped_raises():
     )
     with pytest.raises(ValueError):
         _prepare_features(frame, "date")
+
+
+from drift_detector import _cv_auc, _resolve_n_splits
+
+
+def test_cv_auc_high_on_separable_data():
+    rng = np.random.RandomState(0)
+    X = pd.DataFrame(
+        {"f": np.concatenate([rng.normal(0, 1, 200), rng.normal(5, 1, 200)])}
+    )
+    y = np.array([0] * 200 + [1] * 200)
+    auc, importances = _cv_auc(X, y, n_splits=5, random_state=0, collect_importance=True)
+    assert auc > 0.9
+    assert len(importances) == 5
+
+
+def test_cv_auc_near_half_on_identical_data():
+    rng = np.random.RandomState(1)
+    X = pd.DataFrame({"f": rng.normal(0, 1, 400)})
+    y = np.array([0] * 200 + [1] * 200)
+    auc = _cv_auc(X, y, n_splits=5, random_state=0)
+    assert 0.4 <= auc <= 0.6
+
+
+def test_resolve_n_splits_reduces_and_warns():
+    y = np.array([0, 0, 0, 1, 1, 1])  # smallest class = 3
+    with pytest.warns(UserWarning):
+        n = _resolve_n_splits(y, 5)
+    assert n == 3
+
+
+def test_resolve_n_splits_raises_when_class_too_small():
+    y = np.array([0, 1, 1, 1])  # smallest class = 1
+    with pytest.raises(ValueError):
+        _resolve_n_splits(y, 5)

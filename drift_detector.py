@@ -85,3 +85,60 @@ def _prepare_features(frame, date_column, features=None, uniqueness_threshold=0.
             X[c] = X[c].astype("int64")
 
     return X
+
+
+def _make_model(random_state):
+    """LightGBM classifier tuned to be robust on small windows and quiet.
+
+    ``importance_type='gain'`` makes ``feature_importances_`` return gains.
+    """
+    return LGBMClassifier(
+        n_estimators=100,
+        learning_rate=0.05,
+        num_leaves=31,
+        min_child_samples=5,
+        importance_type="gain",
+        random_state=random_state,
+        n_jobs=1,
+        verbosity=-1,
+    )
+
+
+def _resolve_n_splits(y, n_splits):
+    """Clamp n_splits to the smallest class size; warn if reduced."""
+    min_class = int(np.bincount(y).min())
+    if min_class < 2:
+        raise ValueError(
+            "Each window needs at least 2 rows to cross-validate "
+            f"(smallest window has {min_class})."
+        )
+    if min_class < n_splits:
+        warnings.warn(
+            f"Reducing n_splits from {n_splits} to {min_class} "
+            f"(smallest class has {min_class} rows).",
+            UserWarning,
+        )
+        return min_class
+    return n_splits
+
+
+def _cv_auc(X, y, n_splits, random_state, collect_importance=False):
+    """Out-of-fold ROC-AUC over a stratified K-fold.
+
+    ``n_splits`` must already be resolved (see ``_resolve_n_splits``) so the
+    permutation loop does not re-warn. Returns the AUC, or ``(auc, [imp,...])``
+    when ``collect_importance`` is True (one gain-importance array per fold).
+    """
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    oof = np.zeros(len(y), dtype=float)
+    importances = []
+    for train_idx, test_idx in skf.split(X, y):
+        model = _make_model(random_state)
+        model.fit(X.iloc[train_idx], y[train_idx])
+        oof[test_idx] = model.predict_proba(X.iloc[test_idx])[:, 1]
+        if collect_importance:
+            importances.append(np.asarray(model.feature_importances_, dtype=float))
+    auc = roc_auc_score(y, oof)
+    if collect_importance:
+        return auc, importances
+    return auc
