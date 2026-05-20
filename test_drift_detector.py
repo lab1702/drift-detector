@@ -114,3 +114,27 @@ def test_resolve_n_splits_raises_when_class_too_small():
     y = np.array([0, 1, 1, 1])  # smallest class = 1
     with pytest.raises(ValueError):
         _resolve_n_splits(y, 5)
+
+
+from drift_detector import _permutation_pvalue
+
+
+def test_permutation_pvalue_significant_when_separable():
+    rng = np.random.RandomState(0)
+    X = pd.DataFrame(
+        {"f": np.concatenate([rng.normal(0, 1, 150), rng.normal(5, 1, 150)])}
+    )
+    y = np.array([0] * 150 + [1] * 150)
+    observed = _cv_auc(X, y, n_splits=5, random_state=0)
+    p = _permutation_pvalue(X, y, observed, n_splits=5, n_permutations=20, random_state=0)
+    assert p <= 0.1
+
+
+def test_permutation_pvalue_bounds():
+    # p-value is always in (0, 1] thanks to the +1 correction
+    rng = np.random.RandomState(2)
+    X = pd.DataFrame({"f": rng.normal(0, 1, 200)})
+    y = np.array([0] * 100 + [1] * 100)
+    observed = _cv_auc(X, y, n_splits=5, random_state=0)
+    p = _permutation_pvalue(X, y, observed, n_splits=5, n_permutations=10, random_state=0)
+    assert 0.0 < p <= 1.0

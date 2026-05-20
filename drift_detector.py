@@ -142,3 +142,20 @@ def _cv_auc(X, y, n_splits, random_state, collect_importance=False):
     if collect_importance:
         return auc, importances
     return auc
+
+
+def _permutation_pvalue(X, y, observed_auc, n_splits, n_permutations, random_state):
+    """Label-permutation test for the C2ST AUC.
+
+    Shuffle the labels ``n_permutations`` times, recompute the K-fold AUC, and
+    return ``(#{perm_auc >= observed} + 1) / (n_permutations + 1)``. The +1
+    keeps the p-value strictly positive.
+    """
+    rng = np.random.RandomState(random_state)
+    count = 0
+    for _ in range(n_permutations):
+        y_perm = rng.permutation(y)
+        perm_auc = _cv_auc(X, y_perm, n_splits, random_state)
+        if perm_auc >= observed_auc:
+            count += 1
+    return (count + 1) / (n_permutations + 1)
