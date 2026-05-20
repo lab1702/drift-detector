@@ -63,10 +63,14 @@ detect_drift(
 
 ### 3.2 Feature selection
 1. Start from all columns except `date_column` (or the caller's `features`).
-2. When auto-selecting, **drop near-unique ID-like columns**: any column
-   where `n_unique / n_non_null > 0.95` (e.g. row IDs, UUIDs, raw
-   timestamps) that would let the classifier separate windows trivially.
-   Constant columns (single unique value) are also dropped as uninformative.
+2. When auto-selecting, **drop near-unique ID-like columns**: any
+   **non-float** column where `n_unique / n_non_null > 0.95` (e.g. row IDs,
+   UUIDs, string keys, raw timestamps) that would let the classifier
+   separate windows trivially. **Float columns are exempt** from this rule —
+   continuous numeric measurements are naturally near-unique and are the
+   primary drift signal, so dropping them would be wrong. Constant columns
+   (single unique value, any dtype) are also dropped as uninformative. The
+   escape hatch for any mis-drop is the explicit `features=[...]` argument.
 3. Cast `object`/`string`/`bool` columns to pandas `category` dtype so
    **LightGBM** uses its native categorical handling. Numeric columns are
    passed through as-is; LightGBM handles `NaN` natively. No imputation,
