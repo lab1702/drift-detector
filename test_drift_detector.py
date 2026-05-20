@@ -280,3 +280,31 @@ def test_detect_drift_unknown_feature_raises():
         detect_drift(
             df, "date", *_W1, *_W2, features=["does_not_exist"], n_permutations=5
         )
+
+
+from drift_detector import _build_period_windows
+
+
+def test_build_period_windows_monthly_non_overlapping():
+    lo = pd.Timestamp("2024-01-05")
+    hi = pd.Timestamp("2024-03-20")
+    w = _build_period_windows("MS", lo, hi)
+    assert w[0][0] == pd.Timestamp("2024-01-01")  # snapped back to month start
+    assert w[1][0] == pd.Timestamp("2024-02-01")
+    assert len(w) == 3
+    for (s1, e1), (s2, e2) in zip(w, w[1:]):
+        assert e1 < s2  # non-overlapping
+    assert w[-1][1] == hi  # last window ends at hi
+
+
+def test_build_period_windows_tick_freq_starts_at_lo():
+    lo = pd.Timestamp("2024-01-05")
+    hi = pd.Timestamp("2024-02-20")
+    w = _build_period_windows("30D", lo, hi)
+    assert w[0][0] == lo  # tick offset: rollback is identity
+    assert w[-1][1] == hi
+
+
+def test_build_period_windows_single_period():
+    w = _build_period_windows("MS", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-27"))
+    assert len(w) == 1

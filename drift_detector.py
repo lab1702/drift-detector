@@ -184,6 +184,29 @@ def _top_drivers(importances, feature_names, top_n):
     ]
 
 
+def _build_period_windows(freq, lo, hi):
+    """Build calendar-aligned, non-overlapping, inclusive [start, end] windows.
+
+    Snaps ``lo`` back to a period boundary with the offset's ``rollback`` (a
+    no-op for tick offsets like ``"30D"``), generates edges with
+    ``pd.date_range``, and forms windows ``[edges[i], edges[i+1] - 1ns]`` with
+    the final window ending at ``hi``. ``freq`` is a pandas offset alias
+    (``"MS"``, ``"W"``, ``"QS"``, ``"30D"``, ...).
+    """
+    offset = pd.tseries.frequencies.to_offset(freq)
+    first_edge = offset.rollback(pd.Timestamp(lo))
+    edges = pd.date_range(start=first_edge, end=pd.Timestamp(hi), freq=freq)
+    windows = []
+    for i in range(len(edges)):
+        w_start = edges[i]
+        if i + 1 < len(edges):
+            w_end = edges[i + 1] - pd.Timedelta(nanoseconds=1)
+        else:
+            w_end = pd.Timestamp(hi)
+        windows.append((w_start, w_end))
+    return windows
+
+
 def detect_drift(
     df,
     date_column,
