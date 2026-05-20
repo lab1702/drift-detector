@@ -1,5 +1,7 @@
 # Domain-Classifier Drift Detector
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `detect_drift` measures whether the distribution of an arbitrary tabular
 dataset changed between two date windows, using a domain classifier
 (classifier two-sample test). It labels window-1 rows `0` and window-2 rows
