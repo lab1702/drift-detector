@@ -138,3 +138,27 @@ def test_permutation_pvalue_bounds():
     observed = _cv_auc(X, y, n_splits=5, random_state=0)
     p = _permutation_pvalue(X, y, observed, n_splits=5, n_permutations=10, random_state=0)
     assert 0.0 < p <= 1.0
+
+
+from drift_detector import _top_drivers
+
+
+def test_top_drivers_ranks_and_normalizes():
+    importances = [np.array([10.0, 0.0, 2.0]), np.array([6.0, 0.0, 2.0])]
+    names = ["a", "b", "c"]
+    drivers = _top_drivers(importances, names, top_n=2)
+    assert [d["feature"] for d in drivers] == ["a", "c"]
+    assert len(drivers) == 2
+    full = _top_drivers(importances, names, top_n=3)
+    assert abs(sum(d["importance"] for d in full) - 1.0) < 1e-9
+
+
+def test_top_drivers_handles_all_zero_importance():
+    importances = [np.array([0.0, 0.0]), np.array([0.0, 0.0])]
+    drivers = _top_drivers(importances, ["a", "b"], top_n=2)
+    assert len(drivers) == 2
+    assert all(d["importance"] == 0.0 for d in drivers)
+
+
+def test_top_drivers_empty_when_no_importances():
+    assert _top_drivers([], ["a"], top_n=3) == []

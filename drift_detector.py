@@ -159,3 +159,21 @@ def _permutation_pvalue(X, y, observed_auc, n_splits, n_permutations, random_sta
         if perm_auc >= observed_auc:
             count += 1
     return (count + 1) / (n_permutations + 1)
+
+
+def _top_drivers(importances, feature_names, top_n):
+    """Average per-fold gain importances, normalize to shares, take top_n.
+
+    Returns a list of ``{"feature": name, "importance": share}`` sorted
+    descending. Drivers are only meaningful when drift is significant (high
+    AUC / low p-value); at AUC ~ 0.5 they are noise.
+    """
+    if not importances:
+        return []
+    mean_imp = np.mean(np.vstack(importances), axis=0)
+    total = mean_imp.sum()
+    shares = mean_imp / total if total > 0 else np.zeros_like(mean_imp)
+    order = np.argsort(shares)[::-1][:top_n]
+    return [
+        {"feature": feature_names[i], "importance": float(shares[i])} for i in order
+    ]
